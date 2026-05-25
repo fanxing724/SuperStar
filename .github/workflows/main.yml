@@ -22,7 +22,7 @@ jobs:
         run: | # 安装依赖包
           pip install -r ./requirements.txt 
           
-      
+     
       - name: Run main.py
         env:
           CHAOXING_USERNAME: ${{ secrets.CHAOXING_USERNAME }}
