@@ -1,4 +1,6 @@
-name: 刷课
+
+  name: 刷课
+
   on:
     workflow_dispatch:
     push:
