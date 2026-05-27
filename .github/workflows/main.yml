@@ -1,73 +1,72 @@
- name: 刷课
+name: shuake
 
-  on:
-    workflow_dispatch:
-    push:
-      branches: [ main ]
-    schedule:
-      - cron: "0 8 * * *"
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: "0 8 * * *"
 
-  jobs:
-    Start:
-      runs-on: ubuntu-latest
-      timeout-minutes: 30
-      steps:
-        - name: 拷贝代码
-          uses: actions/checkout@v4
+jobs:
+  Start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
 
-        - name: 设置python环境
-          uses: actions/setup-python@v5
-          with:
-            python-version: '3.13'
-            cache: pip
+      - name: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
 
-        - name: 安装依赖包
-          run: |
-            python -m pip install --upgrade pip
-            pip install -r ./requirements.txt -i
-  https://pypi.tuna.tsinghua.edu.cn/simple
+      - name: install-deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ./requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-        - name: 写入运行配置
-          env:
-            CX_USER: ${{ secrets.CHAOXING_USERNAME }}
-            CX_PASS: ${{ secrets.CHAOXING_PASSWORD }}
-            CX_COURSES: ${{ secrets.CHAOXING_COURSE_LIST }}
-            AI_EP: ${{ secrets.AI_ENDPOINT }}
-            AI_K: ${{ secrets.AI_KEY }}
-            AI_M: ${{ secrets.AI_MODEL }}
-          run: |
-            python -c "
-            import os
-            s = os.environ
-            lines = [
-              '[common]',
-              'use_cookies=false',
-              'username=' + s['CX_USER'],
-              'password=' + s['CX_PASS'],
-              'course_list=' + s.get('CX_COURSES',''),
-              'speed=1',
-              'jobs=4',
-              'notopen_action=retry',
-              '',
-              '[tiku]',
-              'provider=AI',
-              'check_llm_connection=true',
-              'submit=false',
-              'cover_rate=0.9',
-              'delay=1.0',
-              'endpoint=' + s['AI_EP'],
-              'key=' + s['AI_K'],
-              'model=' + s['AI_M'],
-              'min_interval_seconds=3',
-              'http_proxy=',
-              'true_list=正确,对,√,是',
-              'false_list=错误,错,×,否,不对,不正确',
-              '',
-              '[notification]',
-              'provider=DefaultNotification',
-            ]
-            open('config.ini','w').write(chr(10).join(lines))
-            "
+      - name: write-config
+        env:
+          CX_USER: ${{ secrets.CHAOXING_USERNAME }}
+          CX_PASS: ${{ secrets.CHAOXING_PASSWORD }}
+          CX_COURSES: ${{ secrets.CHAOXING_COURSE_LIST }}
+          AI_EP: ${{ secrets.AI_ENDPOINT }}
+          AI_K: ${{ secrets.AI_KEY }}
+          AI_M: ${{ secrets.AI_MODEL }}
+        run: |
+          python -c "
+          import os
+          s = os.environ
+          lines = [
+            '[common]',
+            'use_cookies=false',
+            'username=' + s['CX_USER'],
+            'password=' + s['CX_PASS'],
+            'course_list=' + s.get('CX_COURSES',''),
+            'speed=1',
+            'jobs=4',
+            'notopen_action=retry',
+            '',
+            '[tiku]',
+            'provider=AI',
+            'check_llm_connection=true',
+            'submit=false',
+            'cover_rate=0.9',
+            'delay=1.0',
+            'endpoint=' + s['AI_EP'],
+            'key=' + s['AI_K'],
+            'model=' + s['AI_M'],
+            'min_interval_seconds=3',
+            'http_proxy=',
+            'true_list=zhengque,dui,shi',
+            'false_list=cuowu,cuo,fou,budui,buzhengque',
+            '',
+            '[notification]',
+            'provider=DefaultNotification',
+          ]
+          open('config.ini','w').write(chr(10).join(lines))
+          "
 
-        - name: Run main.py
-          run: python main.py -c config.ini
+      - name: run-main
+        run: python main.py -c config.ini
