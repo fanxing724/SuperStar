@@ -1,31 +1,60 @@
 name: 刷课
-on:
-  push:
-    分支: [ main ]
-  #是否开始每天8点定时刷课，若要开启请把下面两行注释去掉
-  schedule:
-    - cron: "0 8 * * *" 
-    
-jobs: 
-  Start:
-    runs-on: ubuntu-latest # 在最新版本的 Ubuntu 操作系统环境下运行
-    steps: # 要执行的步骤
-      - name: 拷贝代码
-        uses: actions/checkout@v4  # 用于将github代码仓库的代码拷贝到工作目录中
- 
-      - name: 设置python环境
-        uses: actions/setup-python@v5 # 用于设置 Python 环境，它允许你指定要在工作环境中使用的 Python 版本
-        with:
-          python-version: '3.13'  # 选择要用的Python版本
- 
-      - name: 安装依赖包
-        run: | # 安装依赖包
-          pip install -r ./requirements.txt 
-          
-      - name: Run main.py
-        env:
-          CHAOXING_USERNAME: ${{ secrets.CHAOXING_USERNAME }}
-          CHAOXING_PASSWORD: ${{ secrets.CHAOXING_PASSWORD }}
-          CHAOXING_COURSE_LIST: ${{ secrets.CHAOXING_COURSE_LIST }}
-        run: python main.py -u "$CHAOXING_USERNAME" -p "$CHAOXING_PASSWORD" -l "$CHAOXING_COURSE_LIST"
+  on:
+    workflow_dispatch:
+    push:
+      branches: [ main ]
+    schedule:
+      - cron: "0 8 * * *"
 
+  jobs:
+    Start:
+      runs-on: ubuntu-latest
+      timeout-minutes: 30
+      steps:
+        - name: 拷贝代码
+          uses: actions/checkout@v4
+
+        - name: 设置python环境
+          uses: actions/setup-python@v5
+          with:
+            python-version: '3.13'
+            cache: pip
+
+        - name: 安装依赖包
+          run: |
+            python -m pip install --upgrade pip
+            pip install -r ./requirements.txt -i
+  https://pypi.tuna.tsinghua.edu.cn/simple
+
+        - name: 写入运行配置
+          run: |
+            cat > config.ini <<'EOFCONFIG'
+  [common]
+  use_cookies=false
+  username=${{ secrets.CHAOXING_USERNAME }}
+  password=${{ secrets.CHAOXING_PASSWORD }}
+  course_list=${{ secrets.CHAOXING_COURSE_LIST }}
+  speed=1
+  jobs=4
+  notopen_action=retry
+
+  [tiku]
+  provider=AI
+  check_llm_connection=true
+  submit=false
+  cover_rate=0.9
+  delay=1.0
+  endpoint=${{ secrets.AI_ENDPOINT }}
+  key=${{ secrets.AI_KEY }}
+  model=${{ secrets.AI_MODEL }}
+  min_interval_seconds=3
+  http_proxy=
+  true_list=正确,对,√,是
+  false_list=错误,错,×,否,不对,不正确
+
+  [notification]
+  provider=DefaultNotification
+  EOFCONFIG
+
+        - name: Run main.py
+          run: python main.py -c config.ini
