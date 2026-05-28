@@ -13,10 +13,10 @@ from typing import Optional
 
 import httpx
 import requests
-from openai import OpenAI
+from openai import APIConnectionError, APIError, APITimeoutError, OpenAI, RateLimitError
 from urllib3 import disable_warnings, exceptions
 
-from api.answer_check import check_answer
+from api.answer_check import check_answer, check_judgement
 from api.logger import logger
 
 # 关闭警告
@@ -306,11 +306,10 @@ class Tiku:
         """
         if self.DISABLE:
             return False
-        # 对响应的答案作处理
-        answer = answer.strip()
-        if answer in self.true_list:
+        check_result = check_judgement(answer, self.true_list, self.false_list)
+        if check_result == 1:
             return True
-        elif answer in self.false_list:
+        elif check_result == 0:
             return False
         else:
             # 无法判断, 随机选择
@@ -980,6 +979,7 @@ class AI(Tiku):
         super().__init__()
         self.name = 'AI大模型答题'
         self.last_request_time = None
+        self._request_lock = threading.RLock()
 
     def _is_deepseek_v4(self) -> bool:
         return (
@@ -1001,6 +1001,24 @@ class AI(Tiku):
                 logger.debug(f"API请求间隔过短, 等待 {sleep_time} 秒")
                 time.sleep(sleep_time)
 
+    def _create_completion(self, client: OpenAI, **kwargs):
+        max_attempts = 5
+        retry_errors = (RateLimitError, APITimeoutError, APIConnectionError, APIError)
+
+        for attempt in range(max_attempts):
+            try:
+                with self._request_lock:
+                    self._wait_for_interval()
+                    self.last_request_time = time.time()
+                    return client.chat.completions.create(**self._completion_kwargs(**kwargs))
+            except retry_errors as e:
+                if attempt == max_attempts - 1:
+                    logger.error(f"大模型请求失败，已重试 {max_attempts} 次：{e}")
+                    return None
+                sleep_time = min(60, max(self.min_interval_seconds, 1) * (2 ** attempt)) + random.uniform(0, 1)
+                logger.warning(f"大模型请求受限或异常，{sleep_time:.1f} 秒后重试：{e}")
+                time.sleep(sleep_time)
+
     def _query(self, q_info: dict):
         def remove_md_json_wrapper(md_str):
             # 使用正则表达式匹配Markdown代码块并提取内容
@@ -1018,79 +1036,69 @@ class AI(Tiku):
         options_list = q_info['options'].split('\n')
         cleaned_options = [re.sub(r"^[A-Z]\s*", "", option) for option in options_list]
         options = "\n".join(cleaned_options)
-        # 判断题目类型
-        self._wait_for_interval()
-        self.last_request_time = time.time()
         if q_info['type'] == "single":
-            completion = client.chat.completions.create(**self._completion_kwargs(
-                model = self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "本题为单选题，你只能选择一个选项，请根据题目和选项回答问题，以json格式输出正确的选项内容，示例回答：{\"Answer\": [\"答案\"]}。除此之外不要输出任何多余的内容，也不要使用MD语法。如果你使用了互联网搜索，也请不要返回搜索的结果和参考资料"
-                    },
-                    {
-                        "role": "user",
-                        "content": f"题目：{q_info['title']}\n选项：{options}"
-                    }
-                ]
-            ))
+            messages = [
+                {
+                    "role": "system",
+                    "content": "本题为单选题，你只能选择一个选项，请根据题目和选项回答问题，以json格式输出正确的选项内容，示例回答：{\"Answer\": [\"答案\"]}。除此之外不要输出任何多余的内容，也不要使用MD语法。如果你使用了互联网搜索，也请不要返回搜索的结果和参考资料"
+                },
+                {
+                    "role": "user",
+                    "content": f"题目：{q_info['title']}\n选项：{options}"
+                }
+            ]
         elif q_info['type'] == 'multiple':
-            completion = client.chat.completions.create(**self._completion_kwargs(
-                model = self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "本题为多选题，你必须选择两个或以上选项，请根据题目和选项回答问题，以json格式输出正确的选项内容，示例回答：{\"Answer\": [\"答案1\",\n\"答案2\",\n\"答案3\"]}。除此之外不要输出任何多余的内容，也不要使用MD语法。如果你使用了互联网搜索，也请不要返回搜索的结果和参考资料"
-                    },
-                    {
-                        "role": "user",
-                        "content": f"题目：{q_info['title']}\n选项：{options}"
-                    }
-                ]
-            ))
+            messages = [
+                {
+                    "role": "system",
+                    "content": "本题为多选题，你必须选择两个或以上选项，请根据题目和选项回答问题，以json格式输出正确的选项内容，示例回答：{\"Answer\": [\"答案1\",\n\"答案2\",\n\"答案3\"]}。除此之外不要输出任何多余的内容，也不要使用MD语法。如果你使用了互联网搜索，也请不要返回搜索的结果和参考资料"
+                },
+                {
+                    "role": "user",
+                    "content": f"题目：{q_info['title']}\n选项：{options}"
+                }
+            ]
         elif q_info['type'] == 'completion':
-            completion = client.chat.completions.create(**self._completion_kwargs(
-                model = self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "本题为填空题，你必须根据语境和相关知识填入合适的内容，请根据题目回答问题，以json格式输出正确的答案，示例回答：{\"Answer\": [\"答案\"]}。除此之外不要输出任何多余的内容，也不要使用MD语法。如果你使用了互联网搜索，也请不要返回搜索的结果和参考资料"
-                    },
-                    {
-                        "role": "user",
-                        "content": f"题目：{q_info['title']}"
-                    }
-                ]
-            ))
+            messages = [
+                {
+                    "role": "system",
+                    "content": "本题为填空题，你必须根据语境和相关知识填入合适的内容，请根据题目回答问题，以json格式输出正确的答案，示例回答：{\"Answer\": [\"答案\"]}。除此之外不要输出任何多余的内容，也不要使用MD语法。如果你使用了互联网搜索，也请不要返回搜索的结果和参考资料"
+                },
+                {
+                    "role": "user",
+                    "content": f"题目：{q_info['title']}"
+                }
+            ]
         elif q_info['type'] == 'judgement':
-            completion = client.chat.completions.create(**self._completion_kwargs(
-                model = self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "本题为判断题，你只能回答正确或者错误，请根据题目回答问题，以json格式输出正确的答案，示例回答：{\"Answer\": [\"正确\"]}。除此之外不要输出任何多余的内容，也不要使用MD语法。如果你使用了互联网搜索，也请不要返回搜索的结果和参考资料"
-                    },
-                    {
-                        "role": "user",
-                        "content": f"题目：{q_info['title']}"
-                    }
-                ]
-            ))
+            messages = [
+                {
+                    "role": "system",
+                    "content": "本题为判断题，你只能回答正确或者错误，请根据题目回答问题，以json格式输出正确的答案，示例回答：{\"Answer\": [\"正确\"]}。除此之外不要输出任何多余的内容，也不要使用MD语法。如果你使用了互联网搜索，也请不要返回搜索的结果和参考资料"
+                },
+                {
+                    "role": "user",
+                    "content": f"题目：{q_info['title']}"
+                }
+            ]
         else:
-            completion = client.chat.completions.create(**self._completion_kwargs(
-                model = self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "本题为简答题，你必须根据语境和相关知识填入合适的内容，请根据题目回答问题，以json格式输出正确的答案，示例回答：{\"Answer\": [\"这是我的答案\"]}。除此之外不要输出任何多余的内容，也不要使用MD语法。如果你使用了互联网搜索，也请不要返回搜索的结果和参考资料"
-                    },
-                    {
-                        "role": "user",
-                        "content": f"题目：{q_info['title']}"
-                    }
-                ]
-            ))
+            messages = [
+                {
+                    "role": "system",
+                    "content": "本题为简答题，你必须根据语境和相关知识填入合适的内容，请根据题目回答问题，以json格式输出正确的答案，示例回答：{\"Answer\": [\"这是我的答案\"]}。除此之外不要输出任何多余的内容，也不要使用MD语法。如果你使用了互联网搜索，也请不要返回搜索的结果和参考资料"
+                },
+                {
+                    "role": "user",
+                    "content": f"题目：{q_info['title']}"
+                }
+            ]
+
+        completion = self._create_completion(
+            client,
+            model=self.model,
+            messages=messages
+        )
+        if completion is None:
+            return None
 
         try:
             response = json.loads(remove_md_json_wrapper(completion.choices[0].message.content))
@@ -1121,9 +1129,8 @@ class AI(Tiku):
                 client = OpenAI(base_url=self.endpoint, api_key=self.key)
 
             # 发送一个简单的测试请求
-            self._wait_for_interval()
-            self.last_request_time = time.time()
-            completion = client.chat.completions.create(**self._completion_kwargs(
+            completion = self._create_completion(
+                client,
                 model=self.model,
                 messages=[
                     {
@@ -1132,9 +1139,9 @@ class AI(Tiku):
                     }
                 ],
                 max_tokens=64
-            ))
+            )
             
-            if completion.choices and completion.choices[0].message.content:
+            if completion and completion.choices and completion.choices[0].message.content:
                 logger.info(f'{self.name} 连接检查成功')
                 return True
             else:

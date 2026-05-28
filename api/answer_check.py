@@ -24,10 +24,26 @@ def check_multiple(answer):
     return False
 
 
+DEFAULT_TRUE_LIST = {"正确", "对", "√", "是", "true", "1"}
+DEFAULT_FALSE_LIST = {"错误", "错", "×", "否", "不对", "不正确", "false", "0"}
+
+
+def normalize_judgement(answer):
+    return str(answer).strip().lower()
+
+
 def check_judgement(answer, true_list, false_list):
-    if answer in true_list:
+    answer = normalize_judgement(answer)
+    normalized_true_list = {
+        normalize_judgement(item) for item in true_list
+    } | {normalize_judgement(item) for item in DEFAULT_TRUE_LIST}
+    normalized_false_list = {
+        normalize_judgement(item) for item in false_list
+    } | {normalize_judgement(item) for item in DEFAULT_FALSE_LIST}
+
+    if answer in normalized_true_list:
         return 1
-    elif answer in false_list:
+    elif answer in normalized_false_list:
         return 0
     else:
         return -1
